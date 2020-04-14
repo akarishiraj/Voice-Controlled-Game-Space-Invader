@@ -71,7 +71,7 @@ def show_score(x, y):
 
 
 def player(x, y):
-    screen.blit(playerImg, (x, y))  # blit means draw
+    screen.blit(playerImg, (x, y))
 
 
 def enemy(x, y, i):
