@@ -1,4 +1,4 @@
-# seperated login
+# seperated logic
 
 def game_over_text():
     over_text = over_font.render("GAME OVER", True, (255, 255, 255))

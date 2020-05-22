@@ -1,130 +1,232 @@
-import math
 import pygame
 import random
-import pyaudio
+import math
 from pygame import mixer
-from fuzzywuzzy import fuzz
-from fuzzywuzzy import process
-from command_service import activate, stop
-from configuration import *
-from threading import Thread
+import pyaudio
 from ibm_watson import SpeechToTextV1
 from ibm_watson.websocket import RecognizeCallback, AudioSource
+from threading import Thread
 from ibm_cloud_sdk_core.authenticators import IAMAuthenticator
+from queue import Queue, Full
+from threading import Thread
 
-try:
-    from Queue import Queue, Full
-except ImportError:
-    from queue import Queue, Full
-
+###############################################
+#### Initalize queue to store the recordings ##
+###############################################
 CHUNK = 1024
+# Note: It will discard if the websocket client can't consumme fast enough
+# So, increase the max size as per your choice
 BUF_MAX_SIZE = CHUNK * 10
-
-# Variables for recording the speech
-FORMAT = pyaudio.paInt16
-CHANNELS = 1
-RATE = 44100
-
-# game actions
-game_actions = ['left', 'right', 'shoot', 'jump', 'fire']
-
+# Buffer to store audio
 q = Queue(maxsize=int(round(BUF_MAX_SIZE / CHUNK)))
+
+# Create an instance of AudioSource
 audio_source = AudioSource(q, True, True)
 
+###############################################
+#### Prepare Speech to Text Service ########
+###############################################
 
-# define callback for pyaudio to store the recording in queue
-def pyaudio_callback(in_data, frame_count, time_info, status):
-    try:
-        q.put(in_data)
-    except Full:
-        pass
-    return (None, pyaudio.paContinue)
+# initialize speech to text service
+authenticator = IAMAuthenticator('yTSSJ5GSmGhgIA95KnVPDf61KSZinztq909UBMfoqh7l')
+speech_to_text = SpeechToTextV1(authenticator=authenticator)
+speech_to_text.set_service_url("https://api.us-east.speech-to-text.watson.cloud.ibm.com/instances/77c94867-643f-431b-a593-0bc775c18bb7")
 
-
-# define callback for the speech to text service
-
-
-class Player:
-
-    def __init__(self, player_img, x, y):
-        self.playerImg = pygame.image.load(player_img)
-        self.x = x
-        self.y = y
-        self.dx = 0
-
-    def move(self, dx):
-        self.x = self.x + dx
-
-    def left(self):
-        pass
-
-    def right(self):
-        pass
-
-    def shoot(self, screen, bullet):
-        if bullet.state == 'ready':
-            bullet.sound.play()
-            bullet.fire(screen, self.x, self.y)
+actions = []
 
 
-class Bullet:
-    def __init__(self, bullet_img, sound_file=BULLET_SOUND, x=0, y=PY):
-        self.bulletImg = pygame.image.load(bullet_img)
-        self.x = x
-        self.y = y
-        self.dx = 0
-        self.state = "ready"
-        self.sound = mixer.Sound(sound_file)
 
-    def fire(self, screen, dx, dy):
-        self.state = 'fire'
-        screen.blit(self.bulletImg, (dx + 16, dy + 10))
+def main():
+    global actions
+    bullet_state = "ready"
+    # initialize the pygame
+    pygame.init()
+    # create the screen
+    screen = pygame.display.set_mode((800, 600))  # width , height or x,y axis
+    # Background
+    background = pygame.image.load("images/background.png")
+    running = True
+    # Background Sound
+    # mixer.music.load("background.wav")
+    # mixer.music.play(-1)
 
-    def isCollision(self, eX, eY, bX, bY):
-        distance = math.sqrt(math.pow(eX - bX, 2) + (math.pow(eY - bY, 2)))
-        return True if distance < 25 else False
+    # title and icons
+    pygame.display.set_caption("Space Invaders")
+    icon = pygame.image.load("images/periscope.png")
+    pygame.display.set_icon(icon)
+
+    # Player
+    playerImg = pygame.image.load("images/player.png")
+    playerX = 370
+    playerY = 480
+    playerX_change = 0
+
+    # enemy
+    # Enemy
+    enemyImg = []
+    enemyX = []
+    enemyY = []
+    enemyX_change = []
+    enemyY_change = []
+    num_of_enemies = 6
+    for i in range(num_of_enemies):
+        enemyImg.append(pygame.image.load('images/enemy.png'))
+        enemyX.append(random.randint(0, 736))
+        enemyY.append(random.randint(50, 150))
+        enemyX_change.append(4)
+        enemyY_change.append(40)
+    # Bullet
+    bulletImg = pygame.image.load("images/bullet.png")
+    bulletX = 0
+    bulletY = 480  # coordinate of spaceship
+    bulletX_change = 0
+    bulletY_change = 10
+    # ready- you cant see bullet on screen
+    # fire- bullet is moving
+    bullet_state = "ready"
+
+    # Score
+    score_value = 0
+    font = pygame.font.Font('freesansbold.ttf', 32)
+
+    textX = 10
+    textY = 10
+
+    # Game Over
+    over_font = pygame.font.Font('freesansbold.ttf', 64)
 
 
-class Game:
-    textX = textY = 10
-
-    def __init__(self,screen):
-        self.screen = screen
-        self.score = 0
-        self.game_over = False
-        self.running = False
-        self.font = pygame.font.Font(FONT_PATH, 32)
-        self.over_font = pygame.font.Font(FONT_PATH, 64)
-        self.player = Player(PLAYER_PNG, PX, PY)
-        self.enemyImg = []
-        self.enemyX = []
-        self.enemyY = []
-        self.enemyX_change = []
-        self.enemyY_change = []
-        self.num_of_enemies = 6
-        for i in range(self.num_of_enemies):
-            self.enemyImg.append(pygame.image.load(ENEMY_PNG))
-            self.enemyX.append(random.randint(0, 736))
-            self.enemyY.append(random.randint(50, 150))
-            self.enemyX_change.append(4)
-            self.enemyY_change.append(40)
-
-    def game_over_message(self, screen, msg=" GAME OVER !", whiteColor=(255, 255, 255)):
-        over_text = self.over_font.render(msg, True, whiteColor)
+    def game_over_text():
+        over_text = over_font.render("GAME OVER", True, (255, 255, 255))
         screen.blit(over_text, (200, 250))
 
-    def show_score(self, screen, x, y):
-        score = self.font.render("Score : " + str(self.score), True, (255, 255, 255))
+
+    def show_score(x, y):
+        score = font.render("Score : " + str(score_value), True, (255, 255, 255))
         screen.blit(score, (x, y))
 
 
+    def player(x, y):
+        screen.blit(playerImg, (x, y))  # blit means draw
+
+
+    def enemy(x, y, i):
+        screen.blit(enemyImg[i], (x, y))  # blit means draw
+
+
+    def fire_bullet(x, y):
+        screen.blit(bulletImg, (x + 16, y + 10))  # 16 is added so that bullet look at the center of spaceship
+        
+
+
+    def isCollision(enemyX, enemyY, bulletX, bulletY):
+        distance = math.sqrt(math.pow(enemyX - bulletX, 2) + (math.pow(enemyY - bulletY, 2)))
+        if distance < 25:
+            return True
+        else:
+            return False
+
+
+    # game loop
+    while running:
+        # RGB - red, green and blue
+        screen.fill((0, 0, 0))
+        # background image
+        screen.blit(background, (0, 0))
+        # playerX += 0.2 # to move right
+        # playerX -=0.1  # to move left
+        # playerY -= 0.1   # to move up
+
+        for event in actions:
+            if event == "quit":
+                running = False
+            if event == "left":
+                playerX_change = -5
+            if event == 'right':
+                playerX_change = 5
+            if event == 'shoot' or event == 'fire':
+                if bullet_state == "ready":
+                    bullet_sound = mixer.Sound("music/laser.wav")
+                    bullet_sound.play()
+                    bulletX = playerX
+                    fire_bullet(bulletX, bulletY)
+                    bullet_state = "fire"
+
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+            # if keystroke is pressed check whether right or left
+            if event.type == pygame.KEYDOWN:  # KEYDOWN means any key is pressed
+                # print("KEY is pressed")
+                if event.key == pygame.K_LEFT:
+                    playerX_change = -5
+                if event.key == pygame.K_RIGHT:
+                    playerX_change = 5
+                if event.key == pygame.K_SPACE:
+                    if bullet_state == "ready":
+                        bullet_sound = mixer.Sound("music/laser.wav")
+                        bullet_sound.play()
+                        bulletX = playerX
+                        fire_bullet(bulletX, bulletY)
+                        bullet_state = "fire"
+            if event.type == pygame.KEYUP:  # when key is released
+                if event.key == pygame.K_LEFT or event.key == pygame.K_RIGHT:
+                    playerX_change = 0
+        playerX += playerX_change
+        # creating boundaries
+        if playerX <= 0:
+            playerX = 0
+        elif playerX >= 736:  # 800-64 the size of spaceship
+            playerX = 736
+        for i in range(num_of_enemies):
+            if enemyY[i] > 440:
+                for j in range(num_of_enemies):
+                    enemyY[j] = 2000
+                game_over_text()
+                break
+            enemyX[i] += enemyX_change[i]
+            # creating boundaries
+            if enemyX[i] <= 0:
+                enemyX_change[i] = 4
+                enemyY[i] += enemyY_change[i]
+            elif enemyX[i] >= 736:
+                enemyX_change[i] = -4
+                enemyY[i] += enemyY_change[i]
+
+            collision = isCollision(enemyX[i], enemyY[i], bulletX, bulletY)
+            if collision:
+                collision_sound = mixer.Sound("music/explosion.wav")
+                collision_sound.play()
+                bulletY = 480
+                bullet_state = "ready"
+                score_value += 1
+                print(score_value)
+                enemyX[i] = random.randint(0, 735)
+                enemyY[i] = random.randint(50, 150)
+            enemy(enemyX[i], enemyY[i], i)
+
+        # bullet movement
+        if bulletY <= 0:
+            bulletY = 480
+            bullet_state = "ready"
+        if bullet_state is "fire":
+            fire_bullet(bulletX, bulletY)
+            bulletY -= bulletY_change
+
+        player(playerX, playerY)  # remember to call player above screen.fill because player needs to be above on the
+        # screen otherwise it
+        # will not appear
+        show_score(textX, textY)
+        pygame.display.update()
+
+
+# define callback for the speech to text service
 class MyRecognizeCallback(RecognizeCallback):
     def __init__(self):
         RecognizeCallback.__init__(self)
 
     def on_transcription(self, transcript):
-        # print(transcript)
-        pass
+        print("transcript\n",transcript)
 
     def on_connected(self):
         print('Connection was successful')
@@ -137,73 +239,86 @@ class MyRecognizeCallback(RecognizeCallback):
 
     def on_listening(self):
         print('Service is listening')
-        self.start_game()
+        process = Thread(target=main)
+        process.start()
 
+        
     def on_hypothesis(self, hypothesis):
-        actions = [word for word in hypothesis.split() if word in game_actions]
-        for action in actions:
-            self.update_game_world(action)
+        print("hypothesis\n",hypothesis)
+        if hypothesis:
+            actions.extend(hypothesis.split())
+    
 
     def on_data(self, data):
-        # print(data)
         pass
+        # print(data)
 
     def on_close(self):
         print("Connection closed")
 
-    def start_game(self):
-        self.game = Game()
-        print(self.game)
-
-    def update_game_world(self, action):
-        print('game', action)
-        pass
 
 
-# setup speech service
-stt = activate()
+
+# this function will initiate the recognize service and pass in the AudioSource
+def recognize_using_weboscket(*args):
+    mycallback = MyRecognizeCallback()
+    speech_to_text.recognize_using_websocket(audio=audio_source,
+                                             content_type='audio/l16; rate=44100',
+                                             recognize_callback=mycallback,
+                                             interim_results=True)
+
+
+###############################################
+#### Prepare the for recording using Pyaudio ##
+###############################################
+
+# Variables for recording the speech
+FORMAT = pyaudio.paInt16
+CHANNELS = 1
+RATE = 44100
+
+# define callback for pyaudio to store the recording in queue
+def pyaudio_callback(in_data, frame_count, time_info, status):
+    try:
+        q.put(in_data)
+    except Full:
+        pass # discard
+    return (None, pyaudio.paContinue)
 
 # instantiate pyaudio
 audio = pyaudio.PyAudio()
 
 # open stream using callback
 stream = audio.open(
-    format=FORMAT, channels=CHANNELS,
-    rate=RATE, input=True, frames_per_buffer=CHUNK,
-    stream_callback=pyaudio_callback, start=False)
-
-
-# this function will initiate the recognize service and pass in the AudioSource
-def recognize_using_weboscket(*args):
-    mycallback = MyRecognizeCallback()
-    stt.recognize_using_websocket(audio=audio_source,
-                                  content_type='audio/l16; rate=44100',
-                                  recognize_callback=mycallback,
-                                  interim_results=True,
-                                  )
-
-
-def main(running=True):
-    pygame.init()
-    size = [SCREEN_WIDTH, SCREEN_HEIGHT]
-    screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-    background = pygame.image.load(BACKGROUND)
-    pygame.display.set_caption(CAPTION)
-    icon = pygame.image.load(ICON)
-    pygame.display.set_icon(icon)
-    game = Game()
-    while running:
-        screen.fill((0, 0, 0))
-        screen.blit(background, (0, 0))
+    format=FORMAT,
+    channels=CHANNELS,
+    rate=RATE,
+    input=True,
+    frames_per_buffer=CHUNK,
+    stream_callback=pyaudio_callback,
+    start=False
+)
 
 
 if __name__ == '__main__':
+    #########################################################################
+    #### Start the recording and start service to recognize the stream ######
+    #########################################################################
+
+    print("Enter CTRL+C to end recording...")
+    stream.start_stream()
 
     try:
-        stream.start_stream()
         recognize_thread = Thread(target=recognize_using_weboscket, args=())
         recognize_thread.start()
+
         while True:
             pass
-    except:
-        stop(stream, audio, audio_source)
+    except KeyboardInterrupt:
+        # stop recording
+        stream.stop_stream()
+        stream.close()
+        audio.terminate()
+        audio_source.completed_recording()
+    except Exception as e:
+        print(e)
