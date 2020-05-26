@@ -13,7 +13,7 @@ from threading import Thread
 ###############################################
 #### Initalize queue to store the recordings ##
 ###############################################
-CHUNK = 2048
+CHUNK = 1024
 # Note: It will discard if the websocket client can't consumme fast enough
 # So, increase the max size as per your choice
 BUF_MAX_SIZE = CHUNK * 10
@@ -28,9 +28,9 @@ audio_source = AudioSource(q, True, True)
 ###############################################
 
 # initialize speech to text service
-authenticator = IAMAuthenticator('CrGfbKkGCXjyG8n0EusipeLvYKo08Aun2OM2V7X0lelr')
+authenticator = IAMAuthenticator('yTSSJ5GSmGhgIA95KnVPDf61KSZinztq909UBMfoqh7l')
 speech_to_text = SpeechToTextV1(authenticator=authenticator)
-speech_to_text.set_service_url("https://api.eu-gb.speech-to-text.watson.cloud.ibm.com/instances/74a8d6bd-5379-40b0-baae-8f39212f47c4")
+speech_to_text.set_service_url("https://api.us-east.speech-to-text.watson.cloud.ibm.com/instances/77c94867-643f-431b-a593-0bc775c18bb7")
 
 actions = []
 
@@ -265,7 +265,7 @@ def recognize_using_weboscket(*args):
     speech_to_text.recognize_using_websocket(audio=audio_source,
                                              content_type='audio/l16; rate=44100',
                                              recognize_callback=mycallback,
-                                             interim_results=True,)
+                                             interim_results=True)
 
 
 ###############################################
